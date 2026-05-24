@@ -3,13 +3,14 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Control de Asistencia IE</title>
+    <title>Control de Asistencia IE - Supabase</title>
     <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <style>
         :root { --primary: #6366f1; --success: #10b981; --warning: #f59e0b; --danger: #ef4444; --bg: #f3f4f6; }
         * { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, -apple-system, sans-serif; }
         body { background: var(--bg); padding: 20px; min-height: 100vh; }
-        .container { max-width: 600px; margin: 0 auto; background: white; border-radius: 16px; padding: 24px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); }
+        .container { max-width: 700px; margin: 0 auto; background: white; border-radius: 16px; padding: 24px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); }
         h1 { text-align: center; color: #111827; margin-bottom: 8px; }
         .subtitle { text-align: center; color: #6b7280; margin-bottom: 24px; font-size: 14px; }
         #reader { border-radius: 12px; overflow: hidden; margin-bottom: 16px; background: #000; }
@@ -29,12 +30,17 @@
         .log { margin-top: 12px; padding: 10px; background: #f1f5f9; border-radius: 6px; font-family: monospace; font-size: 13px; display: none; }
         .log.show { display: block; }
         .success { color: var(--success); } .error { color: var(--danger); }
+        .db-status { padding: 8px; border-radius: 8px; margin-bottom: 16px; text-align: center; font-size: 14px; }
+        .db-connected { background: #d1fae5; color: #065f46; }
+        .db-disconnected { background: #fee2e2; color: #991b1b; }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>📚 Control de Asistencia</h1>
         <p class="subtitle">Escanea el QR al ingreso | IE [Nombre]</p>
+        
+        <div id="dbStatus" class="db-status db-disconnected">⏳ Conectando a base de datos...</div>
         
         <div id="reader"></div>
         
@@ -46,27 +52,28 @@
 
         <div class="config">
             <h3>⚙️ Configuración</h3>
+            <div class="input-group"><label>Supabase URL:</label><input type="text" id="supabaseUrl" placeholder="https://xxxxx.supabase.co"></div>
+            <div class="input-group"><label>Supabase Publishable Key:</label><input type="text" id="supabaseKey" placeholder="sb_publishable_..."></div>
             <div class="input-group"><label>Token Bot Telegram:</label><input type="text" id="botToken" placeholder="1234567890:ABCdef..."></div>
             <div class="input-group"><label>Chat ID de prueba:</label><input type="text" id="chatIdTest" placeholder="5892341067"></div>
             <div class="input-group"><label>Hora entrada esperada:</label><input type="time" id="horaEntrada" value="07:30"></div>
             <button class="btn" onclick="guardarConfig()">💾 Guardar Configuración</button>
-            <button class="btn btn-secondary" onclick="probarTelegram()">📱 Probar Envío</button>
-            <button class="btn btn-success" onclick="descargarCSV()">📥 Descargar Respaldo CSV (Hoy)</button>
+            <button class="btn btn-secondary" onclick="probarTelegram()">📱 Probar Telegram</button>
+            <button class="btn btn-success" onclick="descargarCSV()">📥 Descargar Respaldo CSV</button>
         </div>
 
         <div id="log" class="log"></div>
     </div>
 
     <script>
-        // 🗃️ Base de datos simulada (luego se reemplazará por Supabase)
-        const DB_ESTUDIANTES = {
-            'EST001': { nombre: 'Juan Pérez', grado: '5to Sec' },
-            'EST002': { nombre: 'María López', grado: '4to Sec' },
-            'EST003': { nombre: 'Carlos Ruiz', grado: '3ro Sec' }
-        };
-
+        // 🔌 Conexión a Supabase
+        let supabase = null;
+        let dbConnected = false;
+        
         // 💾 Estado local
         let config = {
+            supabaseUrl: localStorage.getItem('supabaseUrl') || '',
+            supabaseKey: localStorage.getItem('supabaseKey') || '',
             botToken: localStorage.getItem('botToken') || '',
             chatIdTest: localStorage.getItem('chatIdTest') || '',
             horaEntrada: localStorage.getItem('horaEntrada') || '07:30'
@@ -75,21 +82,61 @@
         let scanner;
 
         // 🔄 Inicialización
-        window.onload = () => {
+        window.onload = async () => {
+            document.getElementById('supabaseUrl').value = config.supabaseUrl;
+            document.getElementById('supabaseKey').value = config.supabaseKey;
             document.getElementById('botToken').value = config.botToken;
             document.getElementById('chatIdTest').value = config.chatIdTest;
             document.getElementById('horaEntrada').value = config.horaEntrada;
+            
+            await inicializarSupabase();
             iniciarScanner();
         };
 
+        async function inicializarSupabase() {
+            if (!config.supabaseUrl || !config.supabaseKey) {
+                actualizarEstadoDB('❌ Configura credenciales de Supabase', false);
+                return;
+            }
+            
+            try {
+                supabase = window.supabase.createClient(config.supabaseUrl, config.supabaseKey);
+                
+                // Probar conexión
+                const { data, error } = await supabase.from('estudiantes').select('id_estudiante').limit(1);
+                
+                if (error) throw error;
+                
+                dbConnected = true;
+                actualizarEstadoDB('✅ Conectado a Supabase', true);
+                mostrarLog('✅ Base de datos conectada correctamente', 'success');
+            } catch (error) {
+                actualizarEstadoDB('❌ Error de conexión: ' + error.message, false);
+                mostrarLog('❌ Error al conectar con Supabase: ' + error.message, 'error');
+            }
+        }
+
+        function actualizarEstadoDB(mensaje, conectado) {
+            const el = document.getElementById('dbStatus');
+            el.textContent = mensaje;
+            el.className = `db-status ${conectado ? 'db-connected' : 'db-disconnected'}`;
+        }
+
         function guardarConfig() {
+            config.supabaseUrl = document.getElementById('supabaseUrl').value.trim();
+            config.supabaseKey = document.getElementById('supabaseKey').value.trim();
             config.botToken = document.getElementById('botToken').value.trim();
             config.chatIdTest = document.getElementById('chatIdTest').value.trim();
             config.horaEntrada = document.getElementById('horaEntrada').value;
+            
+            localStorage.setItem('supabaseUrl', config.supabaseUrl);
+            localStorage.setItem('supabaseKey', config.supabaseKey);
             localStorage.setItem('botToken', config.botToken);
             localStorage.setItem('chatIdTest', config.chatIdTest);
             localStorage.setItem('horaEntrada', config.horaEntrada);
+            
             mostrarLog('✅ Configuración guardada', 'success');
+            inicializarSupabase();
         }
 
         function iniciarScanner() {
@@ -99,44 +146,81 @@
             });
         }
 
-        function onScanSuccess(qrText) {
+        async function onScanSuccess(qrText) {
             scanner.pause();
             const hoy = new Date().toISOString().split('T')[0];
-            const yaRegistrado = registrosHoy.find(r => r.id === qrText);
-            
-            if (yaRegistrado) {
-                mostrarLog(`⏸️ ${qrText} ya registró ingreso hoy. Escaneo ignorado.`, 'success');
-                setTimeout(() => scanner.resume(), 1500);
-                return;
-            }
-
-            const est = DB_ESTUDIANTES[qrText];
-            if (!est) {
-                mostrarLog(`❌ QR no reconocido: ${qrText}. Verifica base de datos.`, 'error');
-                setTimeout(() => scanner.resume(), 1500);
-                return;
-            }
-
             const ahora = new Date();
             const hora = ahora.toLocaleTimeString('es-PE', { hour:'2-digit', minute:'2-digit', second:'2-digit' });
+            
+            // Verificar si ya registró hoy en Supabase
+            if (dbConnected && supabase) {
+                const { data: registros } = await supabase
+                    .from('asistencias')
+                    .select('id')
+                    .eq('id_estudiante', qrText)
+                    .eq('fecha', hoy)
+                    .single();
+                
+                if (registros) {
+                    mostrarLog(`⏸️ ${qrText} ya registró ingreso hoy. Escaneo ignorado.`, 'success');
+                    setTimeout(() => scanner.resume(), 1500);
+                    return;
+                }
+            }
+            
+            // Buscar estudiante en Supabase
+            let estudiante = null;
+            if (dbConnected && supabase) {
+                const { data, error } = await supabase
+                    .from('estudiantes')
+                    .select('*')
+                    .eq('id_estudiante', qrText)
+                    .single();
+                
+                if (error) {
+                    mostrarLog(`❌ Estudiante no encontrado: ${qrText}`, 'error');
+                    setTimeout(() => scanner.resume(), 1500);
+                    return;
+                }
+                estudiante = data;
+            } else {
+                mostrarLog('❌ Base de datos no conectada. Configura Supabase.', 'error');
+                setTimeout(() => scanner.resume(), 1500);
+                return;
+            }
+            
             const estado = calcularEstado(ahora);
             
-            // Guardar en memoria local
-            const registro = { id: qrText, nombre: est.nombre, grado: est.grado, hora, estado, fecha: hoy };
-            registrosHoy.push(registro);
-            localStorage.setItem(`registros_${hoy}`, JSON.stringify(registrosHoy));
-
+            // Guardar en Supabase
+            if (dbConnected && supabase) {
+                const { error } = await supabase.from('asistencias').insert({
+                    id_estudiante: qrText,
+                    fecha: hoy,
+                    hora_llegada: hora,
+                    estado: estado,
+                    dispositivo: 'Web-' + navigator.userAgent.substring(0, 20)
+                });
+                
+                if (error) {
+                    mostrarLog(`❌ Error al guardar: ${error.message}`, 'error');
+                    setTimeout(() => scanner.resume(), 1500);
+                    return;
+                }
+            }
+            
             // Mostrar en pantalla
-            document.getElementById('studentName').textContent = est.nombre;
-            document.getElementById('arrivalInfo').textContent = `🕐 ${hora} | 📚 ${est.grado}`;
+            document.getElementById('studentName').textContent = estudiante.nombre_completo;
+            document.getElementById('arrivalInfo').textContent = `🕐 ${hora} | 📚 ${estudiante.grado_seccion}`;
             const badge = document.getElementById('statusBadge');
             badge.textContent = estado;
             badge.className = `badge ${estado.toLowerCase().replace(/ /g, '-')}`;
             document.getElementById('statusCard').classList.add('show');
-
+            
             // Enviar a Telegram
-            enviarTelegram(est, hora, estado);
-
+            if (estudiante.chat_id_telegram) {
+                enviarTelegram(estudiante, hora, estado);
+            }
+            
             setTimeout(() => {
                 scanner.resume();
                 document.getElementById('statusCard').classList.remove('show');
@@ -155,24 +239,24 @@
             return 'Demasiado tarde';
         }
 
-        async function enviarTelegram(est, hora, estado) {
+        async function enviarTelegram(estudiante, hora, estado) {
             if (!config.botToken || !config.chatIdTest) {
-                mostrarLog('⚠️ Falta Token o Chat ID. Configúralos primero.', 'error');
+                mostrarLog('⚠️ Falta Token o Chat ID de Telegram', 'error');
                 return;
             }
-            const msg = `📚 *Ingreso Registrado*\n👤 ${est.nombre}\n📚 ${est.grado}\n⏰ ${hora}\n📊 ${estado}`;
+            const msg = `📚 *Ingreso Registrado*\n👤 ${estudiante.nombre_completo}\n📚 ${estudiante.grado_seccion}\n⏰ ${hora}\n📊 ${estado}`;
             
             try {
                 const res = await fetch(`https://api.telegram.org/bot${config.botToken}/sendMessage`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ chat_id: config.chatIdTest, text: msg, parse_mode: 'Markdown' })
+                    body: JSON.stringify({ chat_id: estudiante.chat_id_telegram || config.chatIdTest, text: msg, parse_mode: 'Markdown' })
                 });
                 const data = await res.json();
                 if (data.ok) mostrarLog('✅ Notificación enviada a Telegram', 'success');
                 else mostrarLog(`❌ Telegram: ${data.description}`, 'error');
             } catch (e) {
-                mostrarLog(`❌ Conexión fallida: ${e.message}. Verifica internet o usa https://`, 'error');
+                mostrarLog(`❌ Conexión fallida: ${e.message}`, 'error');
             }
         }
 
