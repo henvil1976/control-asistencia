@@ -67,7 +67,7 @@
 
     <script>
         // 🔌 Conexión a Supabase
-        let supabase = null;
+        let supabaseClient = null;
         let dbConnected = false;
         
         // 💾 Estado local
@@ -100,10 +100,10 @@
             }
             
             try {
-                supabase = window.supabase.createClient(config.supabaseUrl, config.supabaseKey);
+                supabaseClient = window.supabase.createClient(config.supabaseUrl, config.supabaseKey);
                 
                 // Probar conexión
-                const { data, error } = await supabase.from('estudiantes').select('id_estudiante').limit(1);
+                const { data, error } = await supabaseClient.from('estudiantes').select('id_estudiante').limit(1);
                 
                 if (error) throw error;
                 
@@ -153,8 +153,8 @@
             const hora = ahora.toLocaleTimeString('es-PE', { hour:'2-digit', minute:'2-digit', second:'2-digit' });
             
             // Verificar si ya registró hoy en Supabase
-            if (dbConnected && supabase) {
-                const { data: registros } = await supabase
+            if (dbConnected && supabaseClient) {
+                const { data: registros } = await supabaseClient
                     .from('asistencias')
                     .select('id')
                     .eq('id_estudiante', qrText)
@@ -170,8 +170,8 @@
             
             // Buscar estudiante en Supabase
             let estudiante = null;
-            if (dbConnected && supabase) {
-                const { data, error } = await supabase
+            if (dbConnected && supabaseClient) {
+                const { data, error } = await supabaseClient
                     .from('estudiantes')
                     .select('*')
                     .eq('id_estudiante', qrText)
@@ -192,8 +192,8 @@
             const estado = calcularEstado(ahora);
             
             // Guardar en Supabase
-            if (dbConnected && supabase) {
-                const { error } = await supabase.from('asistencias').insert({
+            if (dbConnected && supabaseClient) {
+                const { error } = await supabaseClient.from('asistencias').insert({
                     id_estudiante: qrText,
                     fecha: hoy,
                     hora_llegada: hora,
