@@ -56,10 +56,9 @@
             <div class="input-group"><label>Supabase Publishable Key:</label><input type="text" id="supabaseKey" placeholder="sb_publishable_..."></div>
             <div class="input-group"><label>Token Bot Telegram:</label><input type="text" id="botToken" placeholder="1234567890:ABCdef..."></div>
             <div class="input-group"><label>Chat ID de prueba:</label><input type="text" id="chatIdTest" placeholder="5892341067"></div>
-            <div class="input-group"><label>Hora entrada esperada:</label><input type="time" id="horaEntrada" value="07:30"></div>
+            <div class="input-group"><label>Hora entrada esperada:</label><input type="time" id="horaEntrada" value="08:00"></div>
             <button class="btn" onclick="guardarConfig()">💾 Guardar Configuración</button>
             <button class="btn btn-secondary" onclick="probarTelegram()">📱 Probar Telegram</button>
-            <button class="btn btn-success" onclick="descargarCSV()">📥 Descargar Respaldo CSV</button>
         </div>
 
         <div id="log" class="log"></div>
@@ -76,9 +75,8 @@
             supabaseKey: localStorage.getItem('supabaseKey') || '',
             botToken: localStorage.getItem('botToken') || '',
             chatIdTest: localStorage.getItem('chatIdTest') || '',
-            horaEntrada: localStorage.getItem('horaEntrada') || '07:30'
+            horaEntrada: localStorage.getItem('horaEntrada') || '08:00'
         };
-        let registrosHoy = JSON.parse(localStorage.getItem(`registros_${new Date().toISOString().split('T')[0]}`) || '[]');
         let scanner;
 
         // 🔄 Inicialización
@@ -111,7 +109,7 @@
                 actualizarEstadoDB('✅ Conectado a Supabase', true);
                 mostrarLog('✅ Base de datos conectada correctamente', 'success');
             } catch (error) {
-                actualizarEstadoDB('❌ Error de conexión: ' + error.message, false);
+                actualizarEstadoDB(' Error de conexión: ' + error.message, false);
                 mostrarLog('❌ Error al conectar con Supabase: ' + error.message, 'error');
             }
         }
@@ -148,8 +146,11 @@
 
         async function onScanSuccess(qrText) {
             scanner.pause();
-            const hoy = new Date().toISOString().split('T')[0];
+            
+            //  CORRECCIÓN: Fecha en hora local del dispositivo (Perú), no UTC
             const ahora = new Date();
+            const hoy = ahora.toLocaleDateString('en-CA'); // Formato YYYY-MM-DD local
+            
             const hora = ahora.toLocaleTimeString('es-PE', { hour:'2-digit', minute:'2-digit', second:'2-digit' });
             
             // Verificar si ya registró hoy en Supabase
@@ -159,11 +160,11 @@
                     .select('id')
                     .eq('id_estudiante', qrText)
                     .eq('fecha', hoy)
-                    .single();
+                    .maybeSingle(); // maybeSingle es más seguro que single para evitar errores si está vacío
                 
                 if (registros) {
-                    mostrarLog(`⏸️ ${qrText} ya registró ingreso hoy. Escaneo ignorado.`, 'success');
-                    setTimeout(() => scanner.resume(), 1500);
+                    mostrarLog(`⏸️ ${qrText} ya registró ingreso hoy.`, 'success');
+                    setTimeout(() => scanner.resume(), 2000);
                     return;
                 }
             }
@@ -179,13 +180,13 @@
                 
                 if (error) {
                     mostrarLog(`❌ Estudiante no encontrado: ${qrText}`, 'error');
-                    setTimeout(() => scanner.resume(), 1500);
+                    setTimeout(() => scanner.resume(), 2000);
                     return;
                 }
                 estudiante = data;
             } else {
-                mostrarLog('❌ Base de datos no conectada. Configura Supabase.', 'error');
-                setTimeout(() => scanner.resume(), 1500);
+                mostrarLog('❌ Base de datos no conectada.', 'error');
+                setTimeout(() => scanner.resume(), 2000);
                 return;
             }
             
@@ -198,19 +199,19 @@
                     fecha: hoy,
                     hora_llegada: hora,
                     estado: estado,
-                    dispositivo: 'Web-' + navigator.userAgent.substring(0, 20)
+                    dispositivo: 'Web'
                 });
                 
                 if (error) {
                     mostrarLog(`❌ Error al guardar: ${error.message}`, 'error');
-                    setTimeout(() => scanner.resume(), 1500);
+                    setTimeout(() => scanner.resume(), 2000);
                     return;
                 }
             }
             
             // Mostrar en pantalla
             document.getElementById('studentName').textContent = estudiante.nombre_completo;
-            document.getElementById('arrivalInfo').textContent = `🕐 ${hora} | 📚 ${estudiante.grado_seccion}`;
+            document.getElementById('arrivalInfo').textContent = `🕐 ${hora} |  ${estudiante.grado_seccion}`;
             const badge = document.getElementById('statusBadge');
             badge.textContent = estado;
             badge.className = `badge ${estado.toLowerCase().replace(/ /g, '-')}`;
@@ -224,7 +225,7 @@
             setTimeout(() => {
                 scanner.resume();
                 document.getElementById('statusCard').classList.remove('show');
-            }, 2500);
+            }, 3000);
         }
 
         function calcularEstado(fecha) {
@@ -240,10 +241,7 @@
         }
 
         async function enviarTelegram(estudiante, hora, estado) {
-            if (!config.botToken || !config.chatIdTest) {
-                mostrarLog('⚠️ Falta Token o Chat ID de Telegram', 'error');
-                return;
-            }
+            if (!config.botToken || !config.chatIdTest) return;
             const msg = `📚 *Ingreso Registrado*\n👤 ${estudiante.nombre_completo}\n📚 ${estudiante.grado_seccion}\n⏰ ${hora}\n📊 ${estado}`;
             
             try {
@@ -252,11 +250,9 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ chat_id: estudiante.chat_id_telegram || config.chatIdTest, text: msg, parse_mode: 'Markdown' })
                 });
-                const data = await res.json();
-                if (data.ok) mostrarLog('✅ Notificación enviada a Telegram', 'success');
-                else mostrarLog(`❌ Telegram: ${data.description}`, 'error');
+                if (res.ok) mostrarLog('✅ Notificación enviada a Telegram', 'success');
             } catch (e) {
-                mostrarLog(`❌ Conexión fallida: ${e.message}`, 'error');
+                mostrarLog(`❌ Error Telegram: ${e.message}`, 'error');
             }
         }
 
@@ -266,29 +262,18 @@
                 const res = await fetch(`https://api.telegram.org/bot${config.botToken}/sendMessage`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ chat_id: config.chatIdTest, text: '✅ Bot funcionando correctamente', parse_mode: 'Markdown' })
+                    body: JSON.stringify({ chat_id: config.chatIdTest, text: '✅ Bot funcionando correctamente' })
                 });
                 const d = await res.json();
-                mostrarLog(d.ok ? '📱 ¡Prueba exitosa! Revisa Telegram.' : `❌ ${d.description}`, d.ok ? 'success' : 'error');
+                mostrarLog(d.ok ? '📱 ¡Prueba exitosa!' : `❌ ${d.description}`, d.ok ? 'success' : 'error');
             } catch (e) { mostrarLog(`❌ ${e.message}`, 'error'); }
-        }
-
-        function descargarCSV() {
-            if (registrosHoy.length === 0) return mostrarLog('📭 No hay registros hoy para exportar.', 'success');
-            let csv = 'ID,Nombre,Grado,Hora,Estado,Fecha\n';
-            registrosHoy.forEach(r => csv += `${r.id},"${r.nombre}","${r.grado}",${r.hora},"${r.estado}",${r.fecha}\n`);
-            const blob = new Blob([csv], { type: 'text/csv' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a'); a.href = url; a.download = `asistencia_${new Date().toISOString().split('T')[0]}.csv`;
-            a.click(); URL.revokeObjectURL(url);
-            mostrarLog('📥 CSV descargado correctamente.', 'success');
         }
 
         function mostrarLog(msg, tipo) {
             const el = document.getElementById('log');
             el.textContent = msg;
             el.className = `log show ${tipo}`;
-            setTimeout(() => el.classList.remove('show'), 5000);
+            setTimeout(() => el.classList.remove('show'), 4000);
         }
     </script>
 </body>
