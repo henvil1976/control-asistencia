@@ -37,7 +37,7 @@
 </head>
 <body>
     <div class="container">
-        <h1>📚 Control de Asistencia</h1>
+        <h1> Control de Asistencia</h1>
         <p class="subtitle">Escanea el QR al ingreso | IE [Nombre]</p>
         
         <div id="dbStatus" class="db-status db-disconnected">⏳ Conectando a base de datos...</div>
@@ -59,6 +59,8 @@
             <div class="input-group"><label>Hora entrada esperada:</label><input type="time" id="horaEntrada" value="08:00"></div>
             <button class="btn" onclick="guardarConfig()">💾 Guardar Configuración</button>
             <button class="btn btn-secondary" onclick="probarTelegram()">📱 Probar Telegram</button>
+            <!-- BOTÓN RESTAURADO -->
+            <button class="btn btn-success" onclick="descargarCSV()">📥 Descargar Respaldo CSV</button>
         </div>
 
         <div id="log" class="log"></div>
@@ -69,7 +71,6 @@
         let supabaseClient = null;
         let dbConnected = false;
         
-        // 💾 Estado local
         let config = {
             supabaseUrl: localStorage.getItem('supabaseUrl') || '',
             supabaseKey: localStorage.getItem('supabaseKey') || '',
@@ -78,8 +79,8 @@
             horaEntrada: localStorage.getItem('horaEntrada') || '08:00'
         };
         let scanner;
+        let registrosHoy = []; // Para guardar en memoria local y exportar
 
-        // 🔄 Inicialización
         window.onload = async () => {
             document.getElementById('supabaseUrl').value = config.supabaseUrl;
             document.getElementById('supabaseKey').value = config.supabaseKey;
@@ -99,18 +100,13 @@
             
             try {
                 supabaseClient = window.supabase.createClient(config.supabaseUrl, config.supabaseKey);
-                
-                // Probar conexión
                 const { data, error } = await supabaseClient.from('estudiantes').select('id_estudiante').limit(1);
-                
                 if (error) throw error;
                 
                 dbConnected = true;
                 actualizarEstadoDB('✅ Conectado a Supabase', true);
-                mostrarLog('✅ Base de datos conectada correctamente', 'success');
             } catch (error) {
-                actualizarEstadoDB(' Error de conexión: ' + error.message, false);
-                mostrarLog('❌ Error al conectar con Supabase: ' + error.message, 'error');
+                actualizarEstadoDB('❌ Error: ' + error.message, false);
             }
         }
 
@@ -140,36 +136,43 @@
         function iniciarScanner() {
             scanner = new Html5Qrcode("reader");
             scanner.start({ facingMode: "environment" }, { fps: 10, qrbox: 250 }, onScanSuccess, () => {}).catch(err => {
-                mostrarLog(`❌ Error cámara: ${err}. Verifica permisos o usa HTTPS.`, 'error');
+                mostrarLog(`❌ Error cámara: ${err}`, 'error');
             });
+        }
+
+        // ✅ FUNCIÓN DE FECHA SEGURA (Perú)
+        function obtenerFechaLocal() {
+            const d = new Date();
+            const year = d.getFullYear();
+            const month = String(d.getMonth() + 1).padStart(2, '0');
+            const day = String(d.getDate()).padStart(2, '0');
+            return `${year}-${month}-${day}`; // Formato: YYYY-MM-DD
         }
 
         async function onScanSuccess(qrText) {
             scanner.pause();
             
-            //  CORRECCIÓN: Fecha en hora local del dispositivo (Perú), no UTC
+            const hoy = obtenerFechaLocal();
             const ahora = new Date();
-            const hoy = ahora.toLocaleDateString('en-CA'); // Formato YYYY-MM-DD local
-            
             const hora = ahora.toLocaleTimeString('es-PE', { hour:'2-digit', minute:'2-digit', second:'2-digit' });
             
-            // Verificar si ya registró hoy en Supabase
+            // 1. Verificar duplicados
             if (dbConnected && supabaseClient) {
                 const { data: registros } = await supabaseClient
                     .from('asistencias')
                     .select('id')
                     .eq('id_estudiante', qrText)
                     .eq('fecha', hoy)
-                    .maybeSingle(); // maybeSingle es más seguro que single para evitar errores si está vacío
+                    .maybeSingle();
                 
                 if (registros) {
-                    mostrarLog(`⏸️ ${qrText} ya registró ingreso hoy.`, 'success');
+                    mostrarLog(`⏸️ ${qrText} ya registró hoy (${hoy}).`, 'success');
                     setTimeout(() => scanner.resume(), 2000);
                     return;
                 }
             }
             
-            // Buscar estudiante en Supabase
+            // 2. Buscar estudiante
             let estudiante = null;
             if (dbConnected && supabaseClient) {
                 const { data, error } = await supabaseClient
@@ -184,19 +187,15 @@
                     return;
                 }
                 estudiante = data;
-            } else {
-                mostrarLog('❌ Base de datos no conectada.', 'error');
-                setTimeout(() => scanner.resume(), 2000);
-                return;
             }
             
             const estado = calcularEstado(ahora);
             
-            // Guardar en Supabase
+            // 3. Guardar en Supabase
             if (dbConnected && supabaseClient) {
                 const { error } = await supabaseClient.from('asistencias').insert({
                     id_estudiante: qrText,
-                    fecha: hoy,
+                    fecha: hoy, // Enviamos YYYY-MM-DD
                     hora_llegada: hora,
                     estado: estado,
                     dispositivo: 'Web'
@@ -209,15 +208,24 @@
                 }
             }
             
-            // Mostrar en pantalla
+            // 4. Guardar localmente para el CSV
+            registrosHoy.push({
+                id: qrText,
+                nombre: estudiante.nombre_completo,
+                grado: estudiante.grado_seccion,
+                hora: hora,
+                estado: estado,
+                fecha: hoy
+            });
+
+            // 5. Mostrar en pantalla
             document.getElementById('studentName').textContent = estudiante.nombre_completo;
-            document.getElementById('arrivalInfo').textContent = `🕐 ${hora} |  ${estudiante.grado_seccion}`;
+            document.getElementById('arrivalInfo').textContent = `🕐 ${hora} | 📚 ${estudiante.grado_seccion}`;
             const badge = document.getElementById('statusBadge');
             badge.textContent = estado;
             badge.className = `badge ${estado.toLowerCase().replace(/ /g, '-')}`;
             document.getElementById('statusCard').classList.add('show');
             
-            // Enviar a Telegram
             if (estudiante.chat_id_telegram) {
                 enviarTelegram(estudiante, hora, estado);
             }
@@ -242,7 +250,7 @@
 
         async function enviarTelegram(estudiante, hora, estado) {
             if (!config.botToken || !config.chatIdTest) return;
-            const msg = `📚 *Ingreso Registrado*\n👤 ${estudiante.nombre_completo}\n📚 ${estudiante.grado_seccion}\n⏰ ${hora}\n📊 ${estado}`;
+            const msg = `📚 *Ingreso Registrado*\n ${estudiante.nombre_completo}\n ${estudiante.grado_seccion}\n ${hora}\n📊 ${estado}`;
             
             try {
                 const res = await fetch(`https://api.telegram.org/bot${config.botToken}/sendMessage`, {
@@ -250,10 +258,8 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ chat_id: estudiante.chat_id_telegram || config.chatIdTest, text: msg, parse_mode: 'Markdown' })
                 });
-                if (res.ok) mostrarLog('✅ Notificación enviada a Telegram', 'success');
-            } catch (e) {
-                mostrarLog(`❌ Error Telegram: ${e.message}`, 'error');
-            }
+                if (res.ok) mostrarLog('✅ Notificación enviada', 'success');
+            } catch (e) { mostrarLog(`❌ Error Telegram`, 'error'); }
         }
 
         async function probarTelegram() {
@@ -262,11 +268,30 @@
                 const res = await fetch(`https://api.telegram.org/bot${config.botToken}/sendMessage`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ chat_id: config.chatIdTest, text: '✅ Bot funcionando correctamente' })
+                    body: JSON.stringify({ chat_id: config.chatIdTest, text: '✅ Bot OK' })
                 });
                 const d = await res.json();
                 mostrarLog(d.ok ? '📱 ¡Prueba exitosa!' : `❌ ${d.description}`, d.ok ? 'success' : 'error');
             } catch (e) { mostrarLog(`❌ ${e.message}`, 'error'); }
+        }
+
+        // ✅ FUNCIÓN RESTAURADA: Descargar CSV
+        function descargarCSV() {
+            if (registrosHoy.length === 0) return mostrarLog('📭 No hay registros nuevos para exportar.', 'success');
+            
+            let csv = 'ID,Nombre,Grado,Hora,Estado,Fecha\n';
+            registrosHoy.forEach(r => {
+                csv += `${r.id},"${r.nombre}","${r.grado}",${r.hora},"${r.estado}",${r.fecha}\n`;
+            });
+            
+            const blob = new Blob([csv], { type: 'text/csv' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a'); 
+            a.href = url; 
+            a.download = `asistencia_${obtenerFechaLocal()}.csv`;
+            a.click(); 
+            URL.revokeObjectURL(url);
+            mostrarLog(' CSV descargado.', 'success');
         }
 
         function mostrarLog(msg, tipo) {
